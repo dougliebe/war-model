@@ -146,7 +146,7 @@ pbp_data_wide %>%
          shift_index = cumsum(state != lag(state, default = "4v4"))) %>%
   ungroup() %>%
   distinct(match_id, shift_index, .keep_all = T) %>%
-  select(-for_alive, -against_alive, -id, -match_id, -time_ms, -map, -mode, -state) ->
+  select(-for_alive, -against_alive, -id, -time_ms, -map, -mode, -state) ->
   pbp_with_state
 
 # remove the players with so little data as to mess up everything
