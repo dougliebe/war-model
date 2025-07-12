@@ -53,20 +53,20 @@ pbp_long %>%
   mutate(tsla =  pmin(30000, time_ms - lag(time_ms, default = 0)),
          life = cumsum(lag(type, default = "id") == "id")) %>%
   group_by(life, .add = T) %>%
-  mutate(streak = 1:n()-1) %>%
-  mutate(first_eng = as.factor(streak == 0),
+  mutate(streak = 1:n()-1,
          pdk = tsla < 5000 & streak == 0,
          pkk = streak > 0,
-         # tsla = pkk * tsla + (10000*!pkk),
-         pdk = replace_na(pdk, FALSE))  %>%
+         last_kill_id = lag(event_id),
+         last_kill_s = time_ms - lag(time_ms, default = 0),
+         in_trade_eng = streak >= 1 & last_kill_s < 5000 & !pdk,
+         win = type == "attacker_id")  %>%
   ungroup() %>%
   mutate(
     win = factor(type == "attacker_id"),
     
-    across(c('pkk'), as.factor)
   ) %>%
   filter(!pdk) %>%
-  select(match_id, event_id, player, first_eng,tsla, win) ->
+  select(match_id, event_id, player, pkk,tsla, win, in_trade_eng) ->
   kill_data
 
 kill_data %>%
@@ -84,12 +84,14 @@ kill_data %>%
   kill_two_player_data
 
 kill_two_player_data %>%
-  mutate(.pred_odds = exp(0.2555*(first_eng.x==TRUE) + 2.79E-5*tsla.x +
-                            -0.2555*(first_eng.y==TRUE) - 2.79E-5*tsla.y),
+  mutate(.pred_odds = exp(0.254*(pkk.x==TRUE) + 2.79E-5*tsla.x +
+                            -0.254*(pkk.y==TRUE) - 2.79E-5*tsla.y +
+                            -0.0117*(pkk.x & pkk.y)),
          .pred_WIN = .pred_odds/(1+.pred_odds),
          .pred_WIN = ifelse(player_num == "player.x", .pred_WIN, 1-.pred_WIN),
-         WIN = ifelse(player_num == "player.x", win.x== TRUE, win.y==TRUE)) %>%
-  select(match_id, event_id, player, .pred_WIN, WIN) ->
+         WIN = ifelse(player_num == "player.x", win.x== TRUE, win.y==TRUE),
+         in_trade = ifelse(player_num == "player.x", in_trade_eng.x, in_trade_eng.y)) %>%
+  select(match_id, event_id, player, .pred_WIN, WIN, in_trade) ->
   eng_xkill_results
 
 ### GET adv by event_id ####
@@ -144,6 +146,13 @@ events_data %>%
 #### Combine state and xkills #######
 eng_xkill_results %>%
   left_join(pbp_with_state, by = c('match_id', 'event_id')) %>%
+  group_by(match_id, event_id) %>%
+  mutate(trade_sit = case_when(
+    all(in_trade) ~ "BOTH",
+    in_trade ~ "SOLO",
+    any(in_trade) ~ "OTHER",
+    TRUE ~ "NONE"
+  )) %>%
   mutate(adv = ifelse(WIN, adv, -adv)) ->
   events_combined
 
@@ -155,8 +164,7 @@ events_combined %>%
               values_fn = is.character,
               values_fill = FALSE
   ) %>%
-  mutate(across(ends_with("_ENG"), as.factor),
-         WIN = as.factor(WIN),
+  mutate(WIN = as.factor(WIN),
          adv = as.factor(adv)) ->
   events_combined_factors
 
@@ -167,7 +175,7 @@ library(ranger)
 library(caret)
 
 events_combined_factors %>%
-  filter(!is.na(adv)) %>%
+  filter(!is.na(adv), trade_sit != "NONE") %>%
   select(WIN, .pred_WIN, adv, starts_with(player_df$player_id), -starts_with("ALEXX")) ->
   events_filtered
 

@@ -44,12 +44,10 @@ pbp_long %>%
          pdk = replace_na(pdk, FALSE))  %>%
   ungroup() %>%
   mutate(
-         win = factor(type == "attacker_id"),
-         
-         across(c('pkk'), as.factor)
+         win = factor(type == "attacker_id")
          ) %>%
   filter(!pdk) %>%
-  select(match_id, event_id, first_eng,tsla, win) ->
+  select(match_id, event_id, pkk,tsla, win) ->
   kill_data
 
 # split data so that p1 and p2 are evenly the killer
@@ -81,6 +79,7 @@ expected_test <- testing(expected_split)
 
 # make recipe
 expected_rec <- recipe(win.x ~ 0 + ., data = expected_train) %>%
+  step_interact(terms = ~ pkk.x:pkk.y) %>%
   # update_role(c(match_id, event_id), new_role = "ID") %>%
   # step_string2factor(all_predictors(), -tsla) %>%
     step_zv(all_predictors()) %>%
@@ -97,10 +96,10 @@ pp_test <-
 pp_train <-
   juice(expected_rec)
 
-## Build to eng win% model
-set.seed(5)
-# data_boot <- bootstraps(pp_train)
-data_cv <- vfold_cv(pp_train)
+# ## Build to eng win% model
+# set.seed(5)
+# # data_boot <- bootstraps(pp_train)
+# data_cv <- vfold_cv(pp_train)
 
 lr_model <- 
   # specify that the model is a random forest
@@ -110,29 +109,20 @@ lr_model <-
   # choose either the continuous regression or binary classification mode
   set_mode("classification")
 
-rf_model <- 
-  # specify that the model is a random forest
-  rand_forest() %>%
-  # specify that the `mtry` parameter needs to be tuned
-  set_args(trees = 100, mtry = 2 , min_n = 5) %>%
-  # select the engine/package that underlies the model
-  set_engine("ranger") %>%
-  # choose either the continuous regression or binary classification mode
-  set_mode("classification") 
+# rf_model <- 
+#   # specify that the model is a random forest
+#   rand_forest() %>%
+#   # specify that the `mtry` parameter needs to be tuned
+#   set_args(trees = 100, mtry = 2 , min_n = 5) %>%
+#   # select the engine/package that underlies the model
+#   set_engine("ranger") %>%
+#   # choose either the continuous regression or binary classification mode
+#   set_mode("classification") 
 
 
 wf <- workflow() %>%
   add_model(lr_model) %>%
-  add_formula(win.x ~ 0+.) 
-  # add_recipe(expected_rec)
-
-rf_grid <- expand.grid(min_n = c(5,10,15))
-# extract results
-rf_tune_results <- wf %>%
-  tune_grid(resamples = data_cv, #CV object
-            grid = rf_grid, # grid of values to try
-            metrics = metric_set(mn_log_loss) # metrics we care about
-  )
+  add_recipe(expected_rec)
 
 fit_model <- 
   wf %>%

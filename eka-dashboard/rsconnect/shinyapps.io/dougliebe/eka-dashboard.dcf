@@ -1,0 +1,13 @@
+name: eka-dashboard
+title: eka-dashboard
+username:
+account: dougliebe
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 3537128
+bundleId: 4151824
+url: https://dougliebe.shinyapps.io/eka-dashboard/
+when: 1611796920.29488
+asMultiple: FALSE
+asStatic: FALSE
+ignoredFiles: eka-dashboard-base-funcs.R

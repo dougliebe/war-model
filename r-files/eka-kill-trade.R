@@ -29,11 +29,6 @@ first_group = function(x, n = 1) x %>%
   { semi_join(x, .)}
 
 
-## Need to divide the data into "shifts"
-## each shift is, max, the time between engagements
-## need to constantly track how long since each player died
-
-
 ## need roster info first
 plist <-
   roster_q %>%
@@ -68,8 +63,9 @@ events_data %>%
 ## label each interaction with the time since
 ## last engagement for the two participating players
 events_data %>%
-  mutate(time_ms = as.numeric(time_ms)) %>%
   group_by(match_id) %>%
+  # first_group(n = 5) %>%
+  mutate(time_ms = as.numeric(time_ms)) %>%
   mutate(event_id = 1:n()) %>%
   pivot_longer(c(id, attacker_id),
                names_to = "type",
@@ -79,7 +75,7 @@ events_data %>%
 # need to label each eng whether a trade was attempted or not
 # first, check if eng is a trade to a previous kill
 pbp_long %>%
-  arrange(match_id, player) %>%
+  # arrange(match_id, player) %>%
   group_by(match_id, player) %>%
   mutate(tsla =  pmin(15000, time_ms - lag(time_ms, default = 0)),
          life = cumsum(lag(type, default = "id") == "id")) %>%
@@ -89,9 +85,11 @@ pbp_long %>%
          last_kill_id = lag(event_id),
          last_kill_s = time_ms - lag(time_ms, default = 0),
          in_trade_eng = streak >= 1 & last_kill_s < 5000 & !pdk,
-         win = type == "attacker_id") %>%
+         traded = type == "id") %>%
+  group_by(match_id, event_id) %>%
+  mutate(other_player = ifelse(type == 'id', lead(player), lag(player))) %>%
   ungroup() %>%
-  select(match_id, event_id, type, last_kill_id, in_trade_eng, win) ->
+  select(match_id, event_id, type, player, other_player, last_kill_id, in_trade_eng, traded) ->
   trade_kills
 
 events_data %>%
@@ -101,39 +99,28 @@ events_data %>%
   left_join(trade_kills %>%
               arrange(match_id, event_id) %>%
               filter(in_trade_eng) %>%
-              select(match_id, last_kill_id, in_trade_eng),
+              select(match_id, last_kill_id, player,other_player, in_trade_eng, traded),
             by = c("match_id", 'event_id' = 'last_kill_id')) %>%
-  replace_na(list('in_trade_eng' = FALSE)) ->
+  filter(!is.na(traded)) ->
   was_traded
 
-### Figure out who is available to get the trade
-## Need to decide if each player_id is alive, not the dead id in last 4000ms
-pbp_data %>%
-  # arrange(match_id, player_id) %>%
-  group_by(match_id) %>%
-  mutate(
-    time_back = time_ms + ((id == player_id)*4000)
-  ) %>%
-  group_by(match_id, player_id) %>%
-  mutate(alive = (cummax(lag(time_back, default = 0)) < time_back)*1) %>%
-  # only look at players on the trading team
-  # filter(type == "AGAINST") %>%
-  # change the type of the dying player, so its a diff indicator
-  mutate(type = case_when(player_id == id ~ "DEAD",
-                          player_id == attacker_id ~ "KILLER",
-                          TRUE ~ type)) %>%
-  filter(type != "FOR") %>%
-  select(-attacker_id, -time_back) %>%
-  tidyr::pivot_wider(
-    names_from = c(player_id, type),
-    names_glue = "{player_id}_{type}",
-    values_from = alive,
-    values_fn = sum,
-    values_fill = 0
-  ) %>%
-  arrange(match_id, time_ms) %>%
-  select(-time_ms, -id) ->
-  pbp_data_wide_traders
+was_traded %>%
+  pivot_longer(c(id, attacker_id, other_player),
+               names_to = 'player_type',
+               values_to = "player_id") %>%
+  mutate(p = case_when(
+    player_type == "other_player" ~ "P3",
+    player_type == "attacker_id"  ~ "P1",
+    player_type == "id"  ~ "P2"
+  )) %>%
+  pivot_wider(id_cols = c(match_id, event_id, traded),
+              names_from = c(player_id,p),
+              names_glue = "{player_id}_{p}",
+              values_from = player_id,
+              values_fn = is.character,
+              values_fill = FALSE)->
+  was_traded_long
+
 
 pbp_data %>%
   # arrange(match_id, player_id) %>%
@@ -184,11 +171,11 @@ pbp_data_wide %>%
 
 
 ## Combine state, who can get trade, did a trade happen
-was_traded %>%
-  left_join(state_by_events, by = c('match_id', "event_id")) %>%
-  left_join(pbp_data_wide_traders, by = c('match_id', "event_id")) ->
+was_traded_long %>%
+  left_join(state_by_events, by = c('match_id', "event_id")) ->
+  # left_join(pbp_data_wide_traders, by = c('match_id', "event_id")) ->
   # mutate(across(ends_with("AGAINST"), as.factor)) ->
-  trade_full 
+  traded_full 
 
 
 
@@ -197,11 +184,11 @@ library(tidymodels)
 library(ranger)
 library(caret)
 
-trade_full %>%
+traded_full %>%
   ungroup() %>% 
   filter(!is.na(adv)) %>%
-  mutate(in_trade_eng = as.factor(in_trade_eng)) %>%
-  select(TRADE = in_trade_eng , adv, starts_with(player_df$player_id), -starts_with("ALEXX")) ->
+  mutate(traded  = as.factor(traded)) %>%
+  select(TRADE = traded , adv, starts_with(player_df$player_id), -starts_with("ALEXX")) ->
   trade_full_adv
 
 expected_split <- initial_split(trade_full_adv)
@@ -247,3 +234,12 @@ fit_model %>%
   tidy() %>%
   mutate(estimate = exp(estimate)) ->
   proof
+
+proof %>%
+  separate(col = 'term',
+           into = c('player', 'type' ),
+           sep = "_") %>%
+  mutate(type = str_remove(type, "TRUE")) %>%
+  write_csv("eka-kill-coefs.csv")
+  pivot_wider(id_cols = player, names_from = type, values_from = estimate) %>%
+  ggplot(aes(P2, P3, label = player))+geom_label()

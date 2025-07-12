@@ -79,7 +79,7 @@ events_data %>%
 # need to label each eng whether a trade was attempted or not
 # first, check if eng is a trade to a previous kill
 pbp_long %>%
-  arrange(match_id, player) %>%
+  # arrange(match_id, player) %>%
   group_by(match_id, player) %>%
   mutate(tsla =  pmin(15000, time_ms - lag(time_ms, default = 0)),
          life = cumsum(lag(type, default = "id") == "id")) %>%
@@ -98,42 +98,15 @@ events_data %>%
   mutate(time_ms = as.numeric(time_ms)) %>%
   group_by(match_id) %>%
   mutate(event_id = 1:n()) %>%
-  left_join(trade_kills %>%
+  inner_join(trade_kills %>%
               arrange(match_id, event_id) %>%
               filter(in_trade_eng) %>%
-              select(match_id, last_kill_id, in_trade_eng),
+              select(match_id, last_kill_id, in_trade_eng, win),
             by = c("match_id", 'event_id' = 'last_kill_id')) %>%
-  replace_na(list('in_trade_eng' = FALSE)) ->
-  was_traded
+  select(match_id, event_id, player = attacker_id, win) ->
+  trade_engs
 
 ### Figure out who is available to get the trade
-## Need to decide if each player_id is alive, not the dead id in last 4000ms
-pbp_data %>%
-  # arrange(match_id, player_id) %>%
-  group_by(match_id) %>%
-  mutate(
-    time_back = time_ms + ((id == player_id)*4000)
-  ) %>%
-  group_by(match_id, player_id) %>%
-  mutate(alive = (cummax(lag(time_back, default = 0)) < time_back)*1) %>%
-  # only look at players on the trading team
-  # filter(type == "AGAINST") %>%
-  # change the type of the dying player, so its a diff indicator
-  mutate(type = case_when(player_id == id ~ "DEAD",
-                          player_id == attacker_id ~ "KILLER",
-                          TRUE ~ type)) %>%
-  filter(type != "FOR") %>%
-  select(-attacker_id, -time_back) %>%
-  tidyr::pivot_wider(
-    names_from = c(player_id, type),
-    names_glue = "{player_id}_{type}",
-    values_from = alive,
-    values_fn = sum,
-    values_fill = 0
-  ) %>%
-  arrange(match_id, time_ms) %>%
-  select(-time_ms, -id) ->
-  pbp_data_wide_traders
 
 pbp_data %>%
   # arrange(match_id, player_id) %>%
